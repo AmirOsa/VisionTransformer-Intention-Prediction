@@ -13,8 +13,8 @@ from loss import DetectionIntentionLoss
 from utils import generate_anchors
 
 if __name__ == '__main__':
-    TRAIN_DATA_DIR = "./data/argoverse2/sensor/train" 
-    MODEL_SAVE_DIR_VIT = "./trained_models_vit" 
+    TRAIN_DATA_DIR = "/content/drive/MyDrive/Amir_Dataset/ViT-project/av2/sensor/train" 
+    MODEL_SAVE_DIR_VIT = "/content/drive/MyDrive/Amir_Dataset/ViT-project_checkpoints" 
 
     TRAIN_BATCH_SIZE = 8
     NUM_WORKERS = 0
