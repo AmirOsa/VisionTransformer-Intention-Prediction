@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 import pandas as pd 
+from av2.map.map_api import ArgoverseStaticMap
 
 from constants import (INTENTIONS_MAP, INTENTION_HORIZON_STEPS, MIN_SPEED_STOPPED,
                        MIN_SPEED_MOVING, HEADING_CHANGE_THRESH_TURN,
