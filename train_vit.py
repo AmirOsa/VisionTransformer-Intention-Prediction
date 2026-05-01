@@ -7,7 +7,7 @@ from tqdm import tqdm
 from constants import (GRID_HEIGHT_PX, GRID_WIDTH_PX, NUM_INTENTION_CLASSES, ANCHOR_CONFIGS_PAPER,
                        AV2_MAP_AVAILABLE, SHAPELY_AVAILABLE,
                        DOMINANT_CLASSES_FOR_DOWNSAMPLING, INTENTION_DOWNSAMPLE_RATIO, 
-                       LIDAR_HEIGHT_CHANNELS, LIDAR_SWEEPS, LIDAR_TOTAL_CHANNELS)
+                       LIDAR_HEIGHT_CHANNELS, LIDAR_SWEEPS, LIDAR_TOTAL_CHANNELS, MAP_CHANNELS)
 from dataset import ArgoverseIntentNetDataset, collate_fn
 from model_vit import IntentNetViT, BasicBlock 
 from loss import DetectionIntentionLoss
