@@ -15,8 +15,8 @@ from dataset import ArgoverseIntentNetDataset, collate_fn
 from model_vit import IntentNetViT 
 from utils import generate_anchors, decode_box_predictions, apply_nms, compute_axis_aligned_iou, calculate_ap
 
-VAL_DATA_DIR = "./data/argoverse2/sensor/val"  
-MODEL_SAVE_PATH_VIT = "./trained_models_vit/vit_model.pth" 
+VAL_DATA_DIR = "/content/drive/MyDrive/Amir_Dataset/ViT-project/av2/sensor/val"
+MODEL_SAVE_PATH_VIT = "/content/drive/MyDrive/Amir_Dataset/ViT-project_checkpoints/vit_model.pth"
 
 CONFIDENCE_THRESHOLD = 0.1
 NMS_IOU_THRESHOLD = 0.2
