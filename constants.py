@@ -14,6 +14,8 @@ try:
 except ImportError:
     SHAPELY_AVAILABLE = False
 
+DETECTION_IOU_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9]
+IOU_THRESHOLD_FOR_INTENTION_MATCH = 0.5
 
 ANCHOR_CONFIGS_PAPER = [
     (2.0, 4.5, 0.0),        
