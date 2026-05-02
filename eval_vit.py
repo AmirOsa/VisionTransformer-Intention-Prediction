@@ -15,6 +15,11 @@ from dataset import ArgoverseIntentNetDataset, collate_fn
 from model_vit import IntentNetViT 
 from utils import generate_anchors, decode_box_predictions, apply_nms, compute_axis_aligned_iou, calculate_ap
 
+try:
+    from utils import compute_rotated_iou
+except ImportError:
+    compute_rotated_iou = None
+
 VAL_DATA_DIR = "/content/drive/MyDrive/Amir_Dataset/ViT-project/av2/sensor/val"
 MODEL_SAVE_PATH_VIT = "/content/drive/MyDrive/Amir_Dataset/ViT-project_checkpoints/vit_model.pth"
 
