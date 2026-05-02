@@ -22,6 +22,7 @@ CONFIDENCE_THRESHOLD = 0.1
 NMS_IOU_THRESHOLD = 0.2
 INFERENCE_BATCH_SIZE = 8
 NUM_WORKERS_EVAL = 0
+EVAL_USE_ROTATED_IOU = False
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
