@@ -58,7 +58,7 @@ def main_eval_vit():
 
     print(f"\nLoading TRAINED ViT Model from: {MODEL_SAVE_PATH_VIT}")
     try:
-        checkpoint_vit = torch.load(MODEL_SAVE_PATH_VIT, map_location=DEVICE)
+        checkpoint_vit = torch.load(MODEL_SAVE_PATH_VIT, map_location=DEVICE, weights_only=False)
         print("ViT Checkpoint loaded successfully.")
     except Exception as e:
         print(f"ERROR: Failed to load ViT checkpoint from {MODEL_SAVE_PATH_VIT}: {e}")
