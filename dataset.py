@@ -356,7 +356,8 @@ class ArgoverseIntentNetDataset(Dataset):
             final_map_bev = torch.from_numpy(map_bev_np).float()
             final_gt_dict = {
                 'boxes_xywha': frame_gt_dict['boxes_xywha'].float(),
-                'intentions': frame_gt_dict['intentions'].long()
+                'intentions': frame_gt_dict['intentions'].long(),
+                'track_ids': frame_gt_dict['track_ids']
             }
             return {"lidar_bev": final_lidar_bev, "map_bev": final_map_bev, "gt": final_gt_dict}
 
