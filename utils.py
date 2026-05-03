@@ -200,6 +200,7 @@ def prepare_gt_for_frame(current_ts_ns: int, gt_df_with_intent: pd.DataFrame,
 
     gt_boxes_xywha_list = []
     gt_intentions_list = []
+    gt_track_ids_list = []                       
 
     for _, box_row in frame_gt.iterrows():
         try:
@@ -210,6 +211,7 @@ def prepare_gt_for_frame(current_ts_ns: int, gt_df_with_intent: pd.DataFrame,
 
             gt_boxes_xywha_list.append([cx, cy, w, l, heading_rad])
             gt_intentions_list.append(int(box_row['heuristic_intent']))
+            gt_track_ids_list.append(str(box_row['track_uuid']))
         except (ValueError, KeyError) as e:
             if len(gt_boxes_xywha_list) > len(gt_intentions_list):
                 gt_boxes_xywha_list.pop()
@@ -217,11 +219,13 @@ def prepare_gt_for_frame(current_ts_ns: int, gt_df_with_intent: pd.DataFrame,
 
     if not gt_boxes_xywha_list: 
         return {'boxes_xywha': torch.empty((0, 5), dtype=torch.float32),
-                'intentions': torch.empty((0,), dtype=torch.long)}
+                'intentions': torch.empty((0,), dtype=torch.long),
+                'track_ids': []}
 
     return {
         'boxes_xywha': torch.tensor(gt_boxes_xywha_list, dtype=torch.float32),
-        'intentions': torch.tensor(gt_intentions_list, dtype=torch.long)
+        'intentions': torch.tensor(gt_intentions_list, dtype=torch.long),
+        'track_ids': gt_track_ids_list
     }
 
 def decode_box_predictions(box_preds_rel: torch.Tensor, anchors_xywha: torch.Tensor) -> torch.Tensor:
