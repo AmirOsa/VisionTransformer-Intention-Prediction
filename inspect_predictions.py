@@ -64,7 +64,7 @@ with torch.inference_mode():
             gt         = gt_list[b_idx]
             gt_boxes   = gt.get('boxes_xywha', torch.empty((0, 5)))
             gt_intents = gt.get('intentions', torch.empty(0, dtype=torch.long))
-            log_id     = dataset.sequences[sample_idx][0] if hasattr(dataset, 'sequences') else f"sample_{sample_idx}"
+            log_id = dataset.sequences[sample_idx]['log_id'] if hasattr(dataset, 'sequences') else f"sample_{sample_idx}"
             sample_idx += 1
 
             # ── Post-process predictions ──────────────────────────────────────
