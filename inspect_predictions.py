@@ -121,8 +121,10 @@ with torch.inference_mode():
                     gt_matched[best_gt] = True
                     pred_intent_name    = INTENTIONS_MAP_REV.get(pred_intents[pi].item(), "UNKNOWN")
                     gt_intent_name      = INTENTIONS_MAP_REV.get(gt_intents[best_gt].item(), "UNKNOWN")
+                    track_ids = gt.get('track_ids', [])
                     rows.append({
                         'log_id'            : log_id,
+                        'track_id'          : track_ids[best_gt.item()] if track_ids else 'UNKNOWN',
                         'agent_idx'         : best_gt.item(),
                         'predicted_intent'  : pred_intent_name,
                         'actual_intent'     : gt_intent_name,
@@ -135,8 +137,10 @@ with torch.inference_mode():
             for gt_i in range(num_gt):
                 if not gt_matched[gt_i]:
                     gt_intent_name = INTENTIONS_MAP_REV.get(gt_intents[gt_i].item(), "UNKNOWN")
+                    track_ids = gt.get('track_ids', [])
                     rows.append({
                         'log_id'            : log_id,
+                        'track_id'          : track_ids[gt_i] if track_ids else 'UNKNOWN',
                         'agent_idx'         : gt_i,
                         'predicted_intent'  : 'NOT DETECTED',
                         'actual_intent'     : gt_intent_name,
