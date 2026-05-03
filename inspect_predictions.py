@@ -14,7 +14,7 @@ from utils import generate_anchors, decode_box_predictions, apply_nms, compute_a
 # ── Config ────────────────────────────────────────────────────────────────────
 VAL_DATA_DIR         = "/content/drive/MyDrive/Amir_Dataset/ViT-project/av2/sensor/val"
 CHECKPOINT_PATH      = "/content/drive/MyDrive/Amir_Dataset/ViT-project_checkpoints/vit_model.pth"
-OUTPUT_CSV           = "/content/drive/MyDrive/Amir_Dataset/predictions_inspection.csv"
+OUTPUT_CSV           = "/content/drive/MyDrive/Amir_Dataset/ViT-project_Confidence/predictions_inspection.csv"
 CONFIDENCE_THRESHOLD = 0.1
 NMS_IOU_THRESHOLD    = 0.2
 IOU_MATCH_THRESHOLD  = 0.5
