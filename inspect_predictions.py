@@ -260,6 +260,27 @@ else:
         print(f"    {intent:<22}: "
               f"Nadeem correct {n_cor}/{n_sub}  "
               f"models agree {agree}/{n_sub} ({100*agree/max(n_sub,1):.1f}%)")
+      
+# Unified GT: use hivt_actual (now computed on 30 steps, same as Nadeem)
+df['nadeem_correct_unified'] = df['predicted_intent'] == df['hivt_actual']
+df['hivt_correct_unified']   = df['hivt_predicted']   == df['hivt_actual']
+df['both_correct']           = df['nadeem_correct_unified'] & df['hivt_correct_unified']
+df['either_correct']         = df['nadeem_correct_unified'] | df['hivt_correct_unified']
+
+alpha = 0.5
+df['combined_conf'] = (
+    alpha * df['intent_confidence'] +
+    (1 - alpha) * df['hivt_conf']
+)
+df['penalised_conf'] = df['combined_conf'] * (
+    0.8 + 0.2 * df['models_agree'].astype(float)
+)
+
+print("\nUNIFIED EVALUATION (both vs hivt_actual, 30-step GT)")
+print(f"  Nadeem : {df['nadeem_correct_unified'].mean()*100:.1f}%")
+print(f"  HiVT   : {df['hivt_correct_unified'].mean()*100:.1f}%")
+print(f"  Both correct  : {df['both_correct'].sum()} / {len(df)}")
+print(f"  Either correct: {df['either_correct'].sum()} / {len(df)}")      
 
 # ── Save ──────────────────────────────────────────────────────────────────────
 df.to_csv(OUTPUT_CSV, index=False)
