@@ -280,7 +280,18 @@ print("\nUNIFIED EVALUATION (both vs hivt_actual, 30-step GT)")
 print(f"  Nadeem : {df['nadeem_correct_unified'].mean()*100:.1f}%")
 print(f"  HiVT   : {df['hivt_correct_unified'].mean()*100:.1f}%")
 print(f"  Both correct  : {df['both_correct'].sum()} / {len(df)}")
-print(f"  Either correct: {df['either_correct'].sum()} / {len(df)}")      
+print(f"  Either correct: {df['either_correct'].sum()} / {len(df)}")
+
+# Print what agent Nadeem thinks is focal
+print(f"\n--- {scenario_id} ---")
+print(f"  HiVT focal track_id : {focal_track_id}")
+print(f"  Nadeem GT track_ids : {gt_track_ids}")
+print(f"  Nadeem focal idx    : {focal_gt_idx}")
+print(f"  Nadeem focal box    : {focal_gt_box}")
+print(f"  Nadeem actual_intent: {focal_gt_intent_name}")
+print(f"  HiVT   hivt_actual  : {t['hivt_actual']}")
+print(f"  Sequence global_idx : {global_idx}")
+print(f"  Dataset seq log_id  : {dataset.sequences[global_idx]['log_id']}")
 
 # ── Save ──────────────────────────────────────────────────────────────────────
 df.to_csv(OUTPUT_CSV, index=False)
