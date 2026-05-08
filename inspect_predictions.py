@@ -11,7 +11,8 @@ from constants import (GRID_HEIGHT_PX, GRID_WIDTH_PX, ANCHOR_CONFIGS_PAPER,
                        LIDAR_TOTAL_CHANNELS, MAP_CHANNELS, INTENTIONS_MAP_REV)
 from dataset import ArgoverseIntentNetDataset, collate_fn
 from model_vit import IntentNetViT
-from utils import generate_anchors, decode_box_predictions, apply_nms, compute_axis_aligned_iou
+from utils import (generate_anchors, decode_box_predictions,
+                   apply_nms, compute_axis_aligned_iou)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 VAL_DATA_DIR  = "/content/drive/MyDrive/Amir_Dataset/ViT-project/av2/sensor/val"
@@ -19,9 +20,12 @@ CHECKPOINT    = "/content/drive/MyDrive/Amir_Dataset/ViT-project_checkpoints/vit
 HIVT_CSV      = "/content/drive/MyDrive/Amir_Dataset/HiVT-project_Confidence/hivt_focal_inspection.csv"
 OUTPUT_CSV    = "/content/drive/MyDrive/Amir_Dataset/ViT-project_Confidence/nadeem_targeted_inspection.csv"
 
-HIST_STEPS = 50
-STEP_SIZE  = 25   # must match your conversion script
-DEVICE     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+HIST_STEPS        = 50
+STEP_SIZE         = 25
+CONFIDENCE_THRESH = 0.05   # low threshold to catch more detections
+NMS_IOU_THRESH    = 0.2
+MATCH_IOU_THRESH  = 0.1    # low IoU to match focal agent even with imperfect detection
+DEVICE            = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ── Step 1: Load HiVT CSV ─────────────────────────────────────────────────────
 print("Loading HiVT CSV...")
@@ -36,8 +40,7 @@ model.load_state_dict(ckpt['model_state_dict'])
 model.eval()
 print("✅ Model loaded")
 
-# ── Step 3: Load dataset metadata ────────────────────────────────────────────
-# We only need dataset.sequences for indexing — no DataLoader needed
+# ── Step 3: Load dataset ──────────────────────────────────────────────────────
 print("\nLoading val dataset...")
 dataset = ArgoverseIntentNetDataset(data_dir=VAL_DATA_DIR, is_train=False)
 print(f"✅ {len(dataset)} BEV sequences across all val logs")
@@ -50,13 +53,7 @@ anchors = generate_anchors(
     anchor_configs=ANCHOR_CONFIGS_PAPER
 ).to(DEVICE)
 
-# Precompute anchor centers once for direct intention lookup
-anchors_cpu = anchors.cpu()
-anchor_cx = anchors_cpu[:, 0] + anchors_cpu[:, 2] / 2   # [num_anchors]
-anchor_cy = anchors_cpu[:, 1] + anchors_cpu[:, 3] / 2   # [num_anchors]
-
 # ── Step 5: Build log_id → sorted sequence indices map ───────────────────────
-# Fast — just reads metadata, no data loading
 print("\nBuilding sequence index map...")
 log_to_seq_indices = {}
 for i, seq in enumerate(dataset.sequences):
@@ -65,10 +62,7 @@ for i, seq in enumerate(dataset.sequences):
         log_to_seq_indices[lid] = []
     log_to_seq_indices[lid].append(i)
 
-# ── Step 6: Compute exact global sequence index per HiVT scenario ─────────────
-# scenario_id = {log_id}_w{w_idx:03d}
-# target local index within log = w_idx * STEP_SIZE + HIST_STEPS - 1
-# This is the BEV frame at timestep 49 — the last observed moment
+# ── Step 6: Compute target sequence indices ───────────────────────────────────
 print("Computing target sequence indices...")
 targets = []
 
@@ -89,8 +83,7 @@ for _, row in hivt_df.iterrows():
     seq_indices  = log_to_seq_indices[log_id]
 
     if target_local >= len(seq_indices):
-        print(f"  ⚠️  Target local index {target_local} out of range "
-              f"({len(seq_indices)} seqs) for {sid} — skipping")
+        print(f"  ⚠️  Target local index {target_local} out of range for {sid}")
         continue
 
     global_idx = seq_indices[target_local]
@@ -108,8 +101,7 @@ for _, row in hivt_df.iterrows():
 
 print(f"  {len(targets)} scenarios to process")
 
-# ── Step 7: Run inference — exactly len(targets) forward passes ───────────────
-# Directly index into dataset[global_idx] — no iteration over all 2551 sequences
+# ── Step 7: Run inference ─────────────────────────────────────────────────────
 print(f"\nRunning targeted Nadeem inference ({len(targets)} forward passes)...")
 rows = []
 
@@ -120,7 +112,7 @@ with torch.inference_mode():
         log_id         = t['log_id']
         focal_track_id = t['focal_track_id']
 
-        # ── Load only the one sequence we need ───────────────────────────────
+        # ── Load sequence ─────────────────────────────────────────────────────
         sample = dataset[global_idx]
         if sample is None:
             print(f"  ⚠️  dataset[{global_idx}] returned None for {scenario_id}")
@@ -140,7 +132,6 @@ with torch.inference_mode():
 
         # ── Forward pass ──────────────────────────────────────────────────────
         det_cls_logits, det_box_preds_rel, intent_logits = model(lidar_bev, map_bev)
-        # intent_logits shape: [1, num_anchors, 8]
 
         # ── Find focal agent in GT by track_id ───────────────────────────────
         focal_gt_idx = None
@@ -164,28 +155,48 @@ with torch.inference_mode():
                 'hivt_correct'      : t['hivt_correct'],
                 'hivt_conf'         : t['hivt_conf'],
                 'models_agree'      : False,
+                'detection_iou'     : 0.0,
             })
             continue
 
-        focal_gt_box         = gt_boxes[focal_gt_idx]
-        focal_gt_intent      = gt_intents[focal_gt_idx].item()
+        focal_gt_box        = gt_boxes[focal_gt_idx]
+        focal_gt_intent     = gt_intents[focal_gt_idx].item()
         focal_gt_intent_name = INTENTIONS_MAP_REV.get(focal_gt_intent, 'UNKNOWN')
 
-        # ── Direct anchor intention lookup ────────────────────────────────────
-        # Find the anchor closest to the focal agent GT box center,
-        # then read intention logits directly — no detection threshold needed.
-        # This gives us a pure intention prediction regardless of objectness score.
-        focal_cx_val = (focal_gt_box[0] + focal_gt_box[2] / 2).item()
-        focal_cy_val = (focal_gt_box[1] + focal_gt_box[3] / 2).item()
+        # ── Detection pipeline ────────────────────────────────────────────────
+        scores = torch.sigmoid(det_cls_logits[0].squeeze(-1))  # [num_anchors]
+        keep   = torch.where(scores >= CONFIDENCE_THRESH)[0]
 
-        dists       = (anchor_cx - focal_cx_val)**2 + (anchor_cy - focal_cy_val)**2
-        best_anchor = dists.argmin().item()
+        pred_intent_name = 'NOT DETECTED'
+        intent_conf      = 0.0
+        detection_iou    = 0.0
 
-        intent_logits_focal = intent_logits[0][best_anchor]        # [8]
-        intent_probs        = torch.softmax(intent_logits_focal, dim=-1)
-        pred_intent_idx     = intent_probs.argmax().item()
-        pred_intent_name    = INTENTIONS_MAP_REV.get(pred_intent_idx, 'UNKNOWN')
-        intent_conf         = intent_probs.max().item()
+        if keep.numel() > 0:
+            scores_f  = scores[keep]
+            boxes_dec = decode_box_predictions(
+                det_box_preds_rel[0][keep], anchors[keep]
+            )
+            nms_keep = apply_nms(boxes_dec, scores_f, NMS_IOU_THRESH)
+
+            if nms_keep.numel() > 0:
+                pred_scores          = scores_f[nms_keep].cpu()
+                pred_boxes           = boxes_dec[nms_keep].cpu()
+                pred_intent_logits   = intent_logits[0][keep][nms_keep].cpu()  # [M, 8]
+
+                # Match to focal agent GT box by IoU
+                iou_matrix = compute_axis_aligned_iou(
+                    pred_boxes[:, :4].float(),
+                    focal_gt_box[:4].unsqueeze(0).float()
+                )  # [M, 1]
+
+                best_iou_val, best_pred_idx = iou_matrix[:, 0].max(dim=0)
+                detection_iou = best_iou_val.item()
+
+                if best_iou_val >= MATCH_IOU_THRESH:
+                    intent_probs     = torch.softmax(pred_intent_logits[best_pred_idx], dim=-1)
+                    pred_intent_idx  = intent_probs.argmax().item()
+                    pred_intent_name = INTENTIONS_MAP_REV.get(pred_intent_idx, 'UNKNOWN')
+                    intent_conf      = intent_probs.max().item()
 
         correct      = pred_intent_name == focal_gt_intent_name
         models_agree = pred_intent_name == t['hivt_predicted']
@@ -194,7 +205,7 @@ with torch.inference_mode():
               f"Nadeem={pred_intent_name} "
               f"HiVT={t['hivt_predicted']} "
               f"GT={focal_gt_intent_name} "
-              f"agree={models_agree} "
+              f"IoU={detection_iou:.2f} "
               f"conf={intent_conf:.3f}")
 
         rows.append({
@@ -210,26 +221,27 @@ with torch.inference_mode():
             'hivt_correct'      : t['hivt_correct'],
             'hivt_conf'         : t['hivt_conf'],
             'models_agree'      : models_agree,
+            'detection_iou'     : detection_iou,
         })
 
 # ── Step 8: Results ───────────────────────────────────────────────────────────
 df = pd.DataFrame(rows)
 
 if df.empty:
-    print("\n⚠️  No results — check log_id overlap between HiVT CSV and Nadeem val set")
+    print("\n⚠️  No results")
 else:
     pd.set_option('display.max_rows', None)
     pd.set_option('display.max_columns', None)
     pd.set_option('display.width', 200)
 
     print("\n" + "="*100)
-    print("PER-SCENARIO RESULTS (one row per focal agent per window)")
+    print("PER-SCENARIO RESULTS")
     print("="*100)
     print(df[[
         'scenario_id', 'track_id',
         'predicted_intent', 'hivt_predicted', 'actual_intent',
         'models_agree', 'correct', 'hivt_correct',
-        'intent_confidence', 'hivt_conf'
+        'intent_confidence', 'hivt_conf', 'detection_iou'
     ]].to_string(index=False))
 
     print("\n" + "="*100)
@@ -237,61 +249,52 @@ else:
     print("="*100)
 
     n_total          = len(df)
+    n_detected       = (df['predicted_intent'] != 'NOT DETECTED').sum()
     n_nadeem_correct = df['correct'].sum()
     n_hivt_correct   = df['hivt_correct'].sum()
     n_agree          = df['models_agree'].sum()
 
-    print(f"  Total scenarios processed        : {n_total}")
-    print(f"  Nadeem correct intention         : {n_nadeem_correct} / {n_total} "
-          f"({100*n_nadeem_correct/max(n_total,1):.1f}%)")
-    print(f"  HiVT correct intention           : {n_hivt_correct} / {n_total} "
-          f"({100*n_hivt_correct/max(n_total,1):.1f}%)")
-    print(f"  Models AGREE on intention        : {n_agree} / {n_total} "
-          f"({100*n_agree/max(n_total,1):.1f}%)")
-    print(f"  Avg Nadeem intent confidence     : {df['intent_confidence'].mean():.4f}")
-    print(f"  Avg HiVT traj confidence         : {df['hivt_conf'].mean():.4f}")
+    print(f"  Total scenarios          : {n_total}")
+    print(f"  Focal agent detected     : {n_detected} / {n_total} ({100*n_detected/max(n_total,1):.1f}%)")
+    print(f"  Nadeem correct (own GT)  : {n_nadeem_correct} / {n_total} ({100*n_nadeem_correct/max(n_total,1):.1f}%)")
+    print(f"  HiVT correct             : {n_hivt_correct} / {n_total} ({100*n_hivt_correct/max(n_total,1):.1f}%)")
+    print(f"  Models AGREE             : {n_agree} / {n_total} ({100*n_agree/max(n_total,1):.1f}%)")
+    print(f"  Avg Nadeem confidence    : {df['intent_confidence'].mean():.4f}")
+    print(f"  Avg HiVT confidence      : {df['hivt_conf'].mean():.4f}")
+    print(f"  Avg detection IoU        : {df['detection_iou'].mean():.4f}")
 
-    print(f"\n  Per-intention breakdown (ground truth):")
+    print(f"\n  Per-intention breakdown (Nadeem own GT):")
     for intent in sorted(df['actual_intent'].unique()):
         sub   = df[df['actual_intent'] == intent]
-        agree = sub['models_agree'].sum()
         n_cor = sub['correct'].sum()
-        n_sub = len(sub)
-        print(f"    {intent:<22}: "
-              f"Nadeem correct {n_cor}/{n_sub}  "
-              f"models agree {agree}/{n_sub} ({100*agree/max(n_sub,1):.1f}%)")
-      
-# Unified GT: use hivt_actual (now computed on 30 steps, same as Nadeem)
-df['nadeem_correct_unified'] = df['predicted_intent'] == df['hivt_actual']
-df['hivt_correct_unified']   = df['hivt_predicted']   == df['hivt_actual']
-df['both_correct']           = df['nadeem_correct_unified'] & df['hivt_correct_unified']
-df['either_correct']         = df['nadeem_correct_unified'] | df['hivt_correct_unified']
+        n_det = (sub['predicted_intent'] != 'NOT DETECTED').sum()
+        agree = sub['models_agree'].sum()
+        print(f"    {intent:<22}: correct {n_cor}/{len(sub)}  "
+              f"detected {n_det}/{len(sub)}  "
+              f"agree {agree}/{len(sub)}")
 
-alpha = 0.5
-df['combined_conf'] = (
-    alpha * df['intent_confidence'] +
-    (1 - alpha) * df['hivt_conf']
-)
-df['penalised_conf'] = df['combined_conf'] * (
-    0.8 + 0.2 * df['models_agree'].astype(float)
-)
+    # ── Unified evaluation ────────────────────────────────────────────────────
+    df['nadeem_correct_unified'] = df['predicted_intent'] == df['hivt_actual']
+    df['hivt_correct_unified']   = df['hivt_predicted']   == df['hivt_actual']
+    df['both_correct']           = df['nadeem_correct_unified'] & df['hivt_correct_unified']
+    df['either_correct']         = df['nadeem_correct_unified'] | df['hivt_correct_unified']
 
-print("\nUNIFIED EVALUATION (both vs hivt_actual, 30-step GT)")
-print(f"  Nadeem : {df['nadeem_correct_unified'].mean()*100:.1f}%")
-print(f"  HiVT   : {df['hivt_correct_unified'].mean()*100:.1f}%")
-print(f"  Both correct  : {df['both_correct'].sum()} / {len(df)}")
-print(f"  Either correct: {df['either_correct'].sum()} / {len(df)}")
+    alpha = 0.5
+    df['combined_conf'] = (
+        alpha * df['intent_confidence'] +
+        (1 - alpha) * df['hivt_conf']
+    )
+    df['penalised_conf'] = df['combined_conf'] * (
+        0.8 + 0.2 * df['models_agree'].astype(float)
+    )
 
-# Print what agent Nadeem thinks is focal
-print(f"\n--- {scenario_id} ---")
-print(f"  HiVT focal track_id : {focal_track_id}")
-print(f"  Nadeem GT track_ids : {gt_track_ids}")
-print(f"  Nadeem focal idx    : {focal_gt_idx}")
-print(f"  Nadeem focal box    : {focal_gt_box}")
-print(f"  Nadeem actual_intent: {focal_gt_intent_name}")
-print(f"  HiVT   hivt_actual  : {t['hivt_actual']}")
-print(f"  Sequence global_idx : {global_idx}")
-print(f"  Dataset seq log_id  : {dataset.sequences[global_idx]['log_id']}")
+    print("\nUNIFIED EVALUATION (both vs hivt_actual GT)")
+    print(f"  Nadeem : {df['nadeem_correct_unified'].mean()*100:.1f}%")
+    print(f"  HiVT   : {df['hivt_correct_unified'].mean()*100:.1f}%")
+    print(f"  Both correct  : {df['both_correct'].sum()} / {len(df)}")
+    print(f"  Either correct: {df['either_correct'].sum()} / {len(df)}")
+    print(f"  Avg combined confidence  : {df['combined_conf'].mean():.4f}")
+    print(f"  Avg penalised confidence : {df['penalised_conf'].mean():.4f}")
 
 # ── Save ──────────────────────────────────────────────────────────────────────
 df.to_csv(OUTPUT_CSV, index=False)
