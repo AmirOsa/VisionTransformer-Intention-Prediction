@@ -181,46 +181,103 @@ def rasterize_map_ego_centric(map_json_path: str, current_ego_pose: pd.Series) -
 
     return bev_map_uint8.astype(np.float32) 
 
-def prepare_gt_for_frame(current_ts_ns: int, gt_df_with_intent: pd.DataFrame,
-                         static_map) -> dict[str, torch.Tensor]:
+def prepare_gt_for_frame(
+    current_ts_ns: int,
+    gt_df_with_intent: pd.DataFrame,
+    static_map,
+    ego_SE3_world: np.ndarray = None
+) -> dict:
     """
     Prepares ground truth bounding boxes (xywha) and intention labels for a given frame.
     Assumes gt_df_with_intent already contains pre-calculated 'heuristic_intent'.
+
+    MODIFICATION vs Nadeem's original:
+    Added ego_SE3_world parameter. After the city-frame preprocessing fix,
+    tx_m and ty_m in annotations_with_intent.feather are in city frame.
+    This function now transforms them back to ego frame using ego_SE3_world
+    so that GT box positions match the BEV and anchor coordinate system.
+    If ego_SE3_world is None, behaviour is identical to Nadeem's original.
     """
     frame_gt = gt_df_with_intent[
         (gt_df_with_intent['timestamp_ns'] == current_ts_ns) &
         (gt_df_with_intent['category'].isin(VEHICLE_CATEGORIES)) &
-        (gt_df_with_intent['heuristic_intent'] != -1) 
+        (gt_df_with_intent['heuristic_intent'] != -1)
     ]
 
     if 'heuristic_intent' not in frame_gt.columns:
-        print(f"FATAL ERROR in prepare_gt_for_frame: 'heuristic_intent' column missing for timestamp {current_ts_ns}.")
-        return {'boxes_xywha': torch.empty((0, 5), dtype=torch.float32),
-                'intentions': torch.empty((0,), dtype=torch.long)}
+        print(
+            f"FATAL ERROR in prepare_gt_for_frame: "
+            f"'heuristic_intent' column missing for timestamp {current_ts_ns}."
+        )
+        return {
+            'boxes_xywha': torch.empty((0, 5), dtype=torch.float32),
+            'intentions': torch.empty((0,), dtype=torch.long)
+        }
 
     gt_boxes_xywha_list = []
     gt_intentions_list = []
-    gt_track_ids_list = []                       
+    gt_track_ids_list = []
+
+    # Pre-compute ego yaw for heading transformation
+    # Only needed when ego_SE3_world is provided
+    ego_yaw = None
+    if ego_SE3_world is not None:
+        try:
+            ego_yaw = R.from_matrix(
+                ego_SE3_world[:3, :3]
+            ).as_euler('xyz')[2]
+        except ValueError:
+            ego_yaw = None
 
     for _, box_row in frame_gt.iterrows():
         try:
-            cx, cy = box_row['tx_m'], box_row['ty_m']
-            w, l = abs(box_row['width_m']), abs(box_row['length_m'])
+            # Read position — city frame after preprocessing fix
+            cx_city = float(box_row['tx_m'])
+            cy_city = float(box_row['ty_m'])
+            w = abs(float(box_row['width_m']))
+            l = abs(float(box_row['length_m']))
+
             quat = box_row[['qx', 'qy', 'qz', 'qw']].values
-            heading_rad = R.from_quat(quat).as_euler('xyz', degrees=False)[2] 
+            heading_rad = R.from_quat(quat).as_euler('xyz', degrees=False)[2]
+
+            if ego_SE3_world is not None and ego_yaw is not None:
+                # MODIFICATION: transform position from city frame to ego frame
+                # ego_SE3_world transforms world/city coords to ego coords
+                city_pos = np.array([[cx_city, cy_city, 0.0]])
+                ego_pos = transform_points(city_pos, ego_SE3_world)
+                cx = float(ego_pos[0, 0])
+                cy = float(ego_pos[0, 1])
+
+                # Transform heading from city frame to ego frame
+                # heading_city = heading_ego + ego_yaw
+                # therefore: heading_ego = heading_city - ego_yaw
+                heading_rad = heading_rad - ego_yaw
+                # Normalise to [-π, π]
+                heading_rad = float(np.arctan2(
+                    np.sin(heading_rad),
+                    np.cos(heading_rad)
+                ))
+            else:
+                # ego_SE3_world not provided — use positions as-is
+                # This matches Nadeem's original behaviour
+                cx = cx_city
+                cy = cy_city
 
             gt_boxes_xywha_list.append([cx, cy, w, l, heading_rad])
             gt_intentions_list.append(int(box_row['heuristic_intent']))
             gt_track_ids_list.append(str(box_row['track_uuid']))
+
         except (ValueError, KeyError) as e:
             if len(gt_boxes_xywha_list) > len(gt_intentions_list):
                 gt_boxes_xywha_list.pop()
-            continue 
+            continue
 
-    if not gt_boxes_xywha_list: 
-        return {'boxes_xywha': torch.empty((0, 5), dtype=torch.float32),
-                'intentions': torch.empty((0,), dtype=torch.long),
-                'track_ids': []}
+    if not gt_boxes_xywha_list:
+        return {
+            'boxes_xywha': torch.empty((0, 5), dtype=torch.float32),
+            'intentions': torch.empty((0,), dtype=torch.long),
+            'track_ids': []
+        }
 
     return {
         'boxes_xywha': torch.tensor(gt_boxes_xywha_list, dtype=torch.float32),
