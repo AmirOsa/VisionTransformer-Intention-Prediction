@@ -354,7 +354,6 @@ class ArgoverseIntentNetDataset(Dataset):
                 current_ts_ns,
                 gt_df_with_intent,
                 map_api,
-                ego_SE3_world=ego_SE3_world
             )
 
             if self.is_train:
